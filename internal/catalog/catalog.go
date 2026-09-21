@@ -33,13 +33,12 @@ var levelPrefixRe = regexp.MustCompile(`^L(\d+)-`)
 
 // FileMeta describes an individual file inside the catalog
 type FileMeta struct {
-	Path  string // path assoluto
+	Path  string
 	Level int
 }
 
 // Table represents the state of a table in the catalog
 type Table struct {
-	sync.RWMutex
 	Name  string
 	Files []FileMeta
 }

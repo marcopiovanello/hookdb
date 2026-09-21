@@ -38,11 +38,19 @@ func arrowTypeFor(ct *sql.ColumnType) arrow.DataType {
 	switch ct.DatabaseTypeName() {
 	case "BOOLEAN":
 		return arrow.FixedWidthTypes.Boolean
-	case "TINYINT", "SMALLINT", "INTEGER":
+	case "TINYINT":
+		return arrow.PrimitiveTypes.Int8
+	case "SMALLINT":
+		return arrow.PrimitiveTypes.Int16
+	case "INTEGER":
 		return arrow.PrimitiveTypes.Int32
 	case "BIGINT", "HUGEINT":
 		return arrow.PrimitiveTypes.Int64
-	case "UTINYINT", "USMALLINT", "UINTEGER":
+	case "UTINYINT":
+		return arrow.PrimitiveTypes.Uint8
+	case "USMALLINT":
+		return arrow.PrimitiveTypes.Uint16
+	case "UINTEGER":
 		return arrow.PrimitiveTypes.Uint32
 	case "UBIGINT":
 		return arrow.PrimitiveTypes.Uint64
@@ -134,33 +142,53 @@ func appendValue(b array.Builder, t arrow.DataType, v any) {
 			bb.Append(x)
 			return
 		}
+	case *array.Int8Builder:
+		if x, ok := toTyped[int8](v); ok {
+			bb.Append(x)
+			return
+		}
+	case *array.Int16Builder:
+		if x, ok := toTyped[int16](v); ok {
+			bb.Append(x)
+			return
+		}
 	case *array.Int32Builder:
-		if x, ok := toInt64(v); ok {
-			bb.Append(int32(x))
+		if x, ok := toTyped[int32](v); ok {
+			bb.Append(x)
 			return
 		}
 	case *array.Int64Builder:
-		if x, ok := toInt64(v); ok {
+		if x, ok := toTyped[int64](v); ok {
+			bb.Append(x)
+			return
+		}
+	case *array.Uint8Builder:
+		if x, ok := toTyped[uint8](v); ok {
+			bb.Append(x)
+			return
+		}
+	case *array.Uint16Builder:
+		if x, ok := toTyped[uint16](v); ok {
 			bb.Append(x)
 			return
 		}
 	case *array.Uint32Builder:
-		if x, ok := toInt64(v); ok {
-			bb.Append(uint32(x))
+		if x, ok := toTyped[uint32](v); ok {
+			bb.Append(x)
 			return
 		}
 	case *array.Uint64Builder:
-		if x, ok := toInt64(v); ok {
-			bb.Append(uint64(x))
+		if x, ok := toTyped[uint64](v); ok {
+			bb.Append(x)
 			return
 		}
 	case *array.Float32Builder:
-		if x, ok := toFloat64(v); ok {
-			bb.Append(float32(x))
+		if x, ok := toTyped[float32](v); ok {
+			bb.Append(x)
 			return
 		}
 	case *array.Float64Builder:
-		if x, ok := toFloat64(v); ok {
+		if x, ok := toTyped[float64](v); ok {
 			bb.Append(x)
 			return
 		}
@@ -181,28 +209,4 @@ func appendValue(b array.Builder, t arrow.DataType, v any) {
 
 	slog.Error("failed to map value to arrow type", slog.String("id", t.ID().String()))
 	b.AppendNull()
-}
-
-func toInt64(v any) (int64, bool) {
-	switch x := v.(type) {
-	case int64:
-		return x, true
-	case int32:
-		return int64(x), true
-	case int:
-		return int64(x), true
-	case uint64:
-		return int64(x), true
-	}
-	return 0, false
-}
-
-func toFloat64(v any) (float64, bool) {
-	switch x := v.(type) {
-	case float64:
-		return x, true
-	case float32:
-		return float64(x), true
-	}
-	return 0, false
 }

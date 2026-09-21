@@ -1,11 +1,10 @@
 package sqlutil
 
 import (
-	"regexp"
 	"strings"
 )
 
-var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+// var validIdentifier = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func ValidateIdentifier(s string) string {
 	s = strings.ReplaceAll(s, "\x00", "")
