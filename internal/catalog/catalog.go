@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/marcopiovanello/hookdb/internal/wal"
 	"github.com/marcopiovanello/hookdb/pkg/sqlutil"
@@ -216,7 +217,7 @@ func (c *Catalog) ReplaceFiles(table string, oldFiles []string, newFile string, 
 	cleanNewFile := filepath.Clean(newFile)
 
 	// WAL transaction ID
-	txID := fmt.Sprintf("%s-%d", table, time.Now().UnixNano())
+	txID := uuid.NewV7().String()
 
 	// start a transaction
 	// write ahead phase - record the deletion request before thouching the storage and the db
