@@ -1,4 +1,3 @@
-// Package config centralizza i parametri di avvio del motore.
 package config
 
 import (
@@ -9,13 +8,29 @@ import (
 )
 
 type Config struct {
-	DataDir            string        `yaml:"data_dir"`
-	ListenAddr         string        `yaml:"listen_addr"`
-	TimeColumn         string        `yaml:"time_column"`
-	ScanInterval       time.Duration `yaml:"scan_interval"`
+	// DataDir is the entrypoint for the parquet files.
+	// Each subdirectory will be mapped as a table in the SQL engine.
+	DataDir string `yaml:"data_dir"`
+
+	// Arrow Flight SQL gRCP server listen addr. The gRPC server is server over HTTP/2
+	ListenAddr string `yaml:"listen_addr"`
+
+	// TimeColumn is the column that is used by the ORDER BY of the time-series values
+	// Not setting a timecolumn drastically lower the performance of the column store.
+	TimeColumn string `yaml:"time_column"`
+
+	// How often the parquet files are read for changes
+	ScanInterval time.Duration `yaml:"scan_interval"`
+
+	// How often the multi-level compaction job runs
 	CompactionInterval time.Duration `yaml:"compaction_interval"`
-	Levels             []LevelConfig `yaml:"compaction_levels"`
-	DeleteGracePeriod  time.Duration `yaml:"delete_grace_period"`
+
+	// Define the compaction level strategy
+	Levels []LevelConfig `yaml:"compaction_levels"`
+
+	// After the deletion are recorded in the WAL the values are batched for deletion.
+	// This value sets when to defer the deletion job.
+	DeleteGracePeriod time.Duration `yaml:"delete_grace_period"`
 }
 
 type LevelConfig struct {

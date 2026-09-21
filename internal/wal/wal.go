@@ -1,3 +1,5 @@
+// Package wal implements a Write-Ahead-Log (WAL) to handle changes and deletions to the Parquet files
+// in a transaction fashion.
 package wal
 
 import (

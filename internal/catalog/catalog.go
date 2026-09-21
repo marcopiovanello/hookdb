@@ -76,7 +76,7 @@ func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Log
 	}
 
 	if err := cat.recoverPendingDeletions(); err != nil {
-		logger.Error("errore durante la recovery da WAL", "err", err)
+		logger.Error("error while recovering from WAL", "err", err)
 	}
 
 	return cat
@@ -89,12 +89,12 @@ func (c *Catalog) recoverPendingDeletions() error {
 	}
 
 	if len(oldFiles) > 0 {
-		c.logger.Info("WAL Recovery: pulizia file pendenti non eliminati prima del crash", "count", len(oldFiles))
+		c.logger.Info("clearing pending files", "count", len(oldFiles))
 	}
 
 	for _, f := range oldFiles {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
-			c.logger.Warn("recovery: impossibile cancellare file", "file", f, "err", err)
+			c.logger.Warn("cannot remove file", "file", f, "err", err)
 		}
 	}
 	return nil
@@ -136,30 +136,34 @@ func (c *Catalog) Scan() error {
 
 		files, err := listParquetFiles(tableDir)
 		if err != nil {
-			c.logger.Warn("impossibile leggere directory tabella", "table", tableName, "err", err)
+			c.logger.Warn("unreadable table directory", "table", tableName, "err", err)
 			continue
 		}
+
 		if len(files) == 0 {
 			continue
 		}
 
 		c.mu.Lock()
+
 		t, exists := c.tables[tableName]
 		if !exists {
 			t = &Table{Name: tableName}
 			c.tables[tableName] = t
 		}
+
 		changed := !sameFileSet(t.Files, files)
 		if changed {
 			t.Files = files
 		}
+
 		c.mu.Unlock()
 
 		if changed {
 			if err := c.refreshView(tableName, files); err != nil {
 				return fmt.Errorf("refresh view %s: %w", tableName, err)
 			}
-			c.logger.Info("tabella aggiornata", "table", tableName, "n_file", len(files))
+			c.logger.Info("table updated", "table", tableName, "n_file", len(files))
 		}
 	}
 	return nil
@@ -227,7 +231,7 @@ func (c *Catalog) ReplaceFiles(table string, oldFiles []string, newFile string, 
 
 	t, ok := c.tables[table]
 	if !ok {
-		return fmt.Errorf("tabella sconosciuta: %s", table)
+		return fmt.Errorf("unknown table: %s", table)
 	}
 
 	// compute the new state. aka the level drilling.
@@ -254,13 +258,13 @@ func (c *Catalog) deleteAfterGrace(txID string, files []string) {
 
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
-			c.logger.Warn("impossibile cancellare file compattato", "file", f, "err", err)
+			c.logger.Warn("cannot remove compacted file", "file", f, "err", err)
 		}
 	}
 
 	// commit the WAL transaction
 	if err := c.wal.LogCommitted(txID); err != nil {
-		c.logger.Error("impossibile scrivere commit nel WAL", "txID", txID, "err", err)
+		c.logger.Error("cannot write commit in the WAL", "txID", txID, "err", err)
 	}
 }
 
@@ -347,6 +351,7 @@ func sameFileSet(a []FileMeta, b []FileMeta) bool {
 
 	sa := pathsOf(a)
 	sb := pathsOf(b)
+
 	sort.Strings(sa)
 	sort.Strings(sb)
 
@@ -367,6 +372,7 @@ func diffMeta(all []FileMeta, remove []string) []FileMeta {
 	}
 
 	out := make([]FileMeta, 0, len(all))
+
 	for _, f := range all {
 		if !rm[f.Path] {
 			out = append(out, f)

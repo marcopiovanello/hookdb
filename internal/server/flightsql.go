@@ -1,24 +1,10 @@
-// Package server implementa la superficie Arrow Flight SQL del motore.
+// Package server implements the base surface of the Arrow Flight SQL engine.
 //
-// IMPORTANTE: le firme esatte dei metodi di flightsql.BaseServer possono
-// variare leggermente da una versione all'altra di github.com/apache/arrow-go.
-// Questo file è stato scritto seguendo il pattern dell'esempio ufficiale
-// (arrow-go/arrow/flight/flightsql/example, backend SQLite) ma NON è stato
-// compilato in questo ambiente (qui non ho accesso al module proxy Go).
-// Prima di fidartene alla lettera:
+// TODO: GetFlightInfoStatement (perform SQL query) and DoGetStatement (retrieve data) are implemented.
+// The other method are left as stubs with the default implementation of the go-arrow library.
+// A future implementation of the left stubs will provide autocomplete for Grafana.
 //
-//  1. `go get github.com/apache/arrow-go/v18`
-//  2. `go doc github.com/apache/arrow-go/v18/arrow/flight/flightsql BaseServer`
-//  3. Confronta le firme con quelle usate qui e correggi eventuali scostamenti.
-//
-// I metodi core (GetFlightInfoStatement / DoGetStatement, cioè "esegui
-// questa SQL e restituiscimi i dati") sono la parte più importante e più
-// stabile dell'API. I metodi di metadata (cataloghi/schemi/tabelle) sono
-// lasciati come stub con TODO: senza di essi l'esecuzione di query dirette
-// funziona comunque, ma l'autocomplete/schema-browser di Grafana potrebbe
-// non popolarsi. Per completarli, il modo più rapido è copiare le relative
-// implementazioni dall'esempio SQLite ufficiale e sostituire l'accesso a
-// SQLite con query equivalenti su DuckDB (information_schema / pragma_*).
+// TODO: copy information_schema / pragma_* impl. from duckdb and create the translation layer of Arrow
 package server
 
 import (
@@ -54,17 +40,24 @@ func New(db *sql.DB, cat *catalog.Catalog) *Server {
 	}
 }
 
-func (s *Server) GetFlightInfoStatement(ctx context.Context, cmd flightsql.StatementQuery, desc *flight.FlightDescriptor) (*flight.FlightInfo, error) {
+func (s *Server) GetFlightInfoStatement(
+	ctx context.Context,
+	cmd flightsql.StatementQuery,
+	desc *flight.FlightDescriptor,
+) (
+	*flight.FlightInfo,
+	error,
+) {
 	query := cmd.GetQuery()
 
 	schema, err := s.schemaForQuery(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("impossibile determinare lo schema della query: %w", err)
+		return nil, fmt.Errorf("cannot infer query schema: %w", err)
 	}
 
 	ticketBytes, err := flightsql.CreateStatementQueryTicket([]byte(query))
 	if err != nil {
-		return nil, fmt.Errorf("creazione ticket: %w", err)
+		return nil, fmt.Errorf("failed creating query ticket: %w", err)
 	}
 
 	info := &flight.FlightInfo{
@@ -79,12 +72,19 @@ func (s *Server) GetFlightInfoStatement(ctx context.Context, cmd flightsql.State
 	return info, nil
 }
 
-func (s *Server) DoGetStatement(ctx context.Context, ticket flightsql.StatementQueryTicket) (*arrow.Schema, <-chan flight.StreamChunk, error) {
+func (s *Server) DoGetStatement(
+	ctx context.Context,
+	ticket flightsql.StatementQueryTicket,
+) (
+	*arrow.Schema,
+	<-chan flight.StreamChunk,
+	error,
+) {
 	query := string(ticket.GetStatementHandle())
 
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, nil, fmt.Errorf("esecuzione query: %w", err)
+		return nil, nil, fmt.Errorf("failed while executing query: %w", err)
 	}
 
 	schema, err := sqlarrow.BuildSchema(rows)
@@ -94,6 +94,7 @@ func (s *Server) DoGetStatement(ctx context.Context, ticket flightsql.StatementQ
 	}
 
 	ch := make(chan flight.StreamChunk)
+
 	go func() {
 		defer rows.Close()
 		defer close(ch)
@@ -112,6 +113,7 @@ func (s *Server) DoGetStatement(ctx context.Context, ticket flightsql.StatementQ
 
 func (s *Server) schemaForQuery(ctx context.Context, query string) (*arrow.Schema, error) {
 	probe := fmt.Sprintf("SELECT * FROM (%s) AS _tf_probe LIMIT 0", query)
+
 	rows, err := s.db.QueryContext(ctx, probe)
 	if err != nil {
 		rows, err = s.db.QueryContext(ctx, query)
@@ -119,6 +121,7 @@ func (s *Server) schemaForQuery(ctx context.Context, query string) (*arrow.Schem
 			return nil, err
 		}
 	}
+
 	defer rows.Close()
 	return sqlarrow.BuildSchema(rows)
 }
@@ -136,6 +139,7 @@ func (s *Server) DoGetCatalogs(ctx context.Context) (*arrow.Schema, <-chan fligh
 
 	b := array.NewRecordBuilder(s.mem, schema)
 	defer b.Release()
+
 	strBuilder := b.Field(0).(*array.StringBuilder)
 
 	for rows.Next() {
@@ -145,18 +149,21 @@ func (s *Server) DoGetCatalogs(ctx context.Context) (*arrow.Schema, <-chan fligh
 		}
 		strBuilder.Append(name)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
 
 	rec := b.NewRecordBatch()
+
 	ch := make(chan flight.StreamChunk, 1)
 	ch <- flight.StreamChunk{Data: rec}
 	close(ch)
+
 	return schema, ch, nil
 }
 
 // TODO: DoGetDBSchemas / GetFlightInfoSchemas
-// TODO: DoGetTables / GetFlightInfoTables  (usa s.cat.Tables())
+// TODO: DoGetTables / GetFlightInfoTables  (s.cat.Tables())
 // TODO: DoGetTableTypes / GetFlightInfoTableTypes
 // TODO: DoGetSqlInfo / GetFlightInfoSqlInfo

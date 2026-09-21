@@ -1,8 +1,11 @@
+// Package sqlarrow provides utilties for the interaction between Apache Arrow
+// and database/sql compabible drivers.
 package sqlarrow
 
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -10,8 +13,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 )
 
-// BuildSchema deriva uno schema Arrow dalle colonne di una *sql.Rows già
-// aperta (va chiamata prima di consumare le righe).
+// Derives an Arrow schema from *sql.Rows values
 func BuildSchema(rows *sql.Rows) (*arrow.Schema, error) {
 	cts, err := rows.ColumnTypes()
 	if err != nil {
@@ -19,6 +21,7 @@ func BuildSchema(rows *sql.Rows) (*arrow.Schema, error) {
 	}
 
 	fields := make([]arrow.Field, len(cts))
+
 	for i, ct := range cts {
 		nullable, _ := ct.Nullable()
 		fields[i] = arrow.Field{
@@ -27,6 +30,7 @@ func BuildSchema(rows *sql.Rows) (*arrow.Schema, error) {
 			Nullable: nullable,
 		}
 	}
+
 	return arrow.NewSchema(fields, nil), nil
 }
 
@@ -57,14 +61,23 @@ func arrowTypeFor(ct *sql.ColumnType) arrow.DataType {
 	}
 }
 
-func RowsToRecords(mem memory.Allocator, schema *arrow.Schema, rows *sql.Rows, maxBatch int, emit func(arrow.RecordBatch) error) error {
+func RowsToRecords(
+	mem memory.Allocator,
+	schema *arrow.Schema,
+	rows *sql.Rows,
+	maxBatch int,
+	emit func(arrow.RecordBatch) error,
+) error {
 	if maxBatch <= 0 {
 		maxBatch = 4096
 	}
 
-	n := len(schema.Fields())
-	rawVals := make([]interface{}, n)
-	scanDst := make([]interface{}, n)
+	var (
+		n       = len(schema.Fields())
+		rawVals = make([]any, n)
+		scanDst = make([]any, n)
+	)
+
 	for i := range rawVals {
 		scanDst[i] = &rawVals[i]
 	}
@@ -73,12 +86,15 @@ func RowsToRecords(mem memory.Allocator, schema *arrow.Schema, rows *sql.Rows, m
 	defer builder.Release()
 
 	count := 0
+
 	flush := func() error {
 		if count == 0 {
 			return nil
 		}
-		rec := builder.NewRecord()
+
+		rec := builder.NewRecordBatch()
 		count = 0
+
 		return emit(rec)
 	}
 
@@ -86,19 +102,24 @@ func RowsToRecords(mem memory.Allocator, schema *arrow.Schema, rows *sql.Rows, m
 		if err := rows.Scan(scanDst...); err != nil {
 			return fmt.Errorf("scan row: %w", err)
 		}
+
 		for i, f := range schema.Fields() {
 			appendValue(builder.Field(i), f.Type, rawVals[i])
 		}
+
 		count++
+
 		if count >= maxBatch {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("rows iteration: %w", err)
 	}
+
 	return flush()
 }
 
@@ -157,9 +178,8 @@ func appendValue(b array.Builder, t arrow.DataType, v any) {
 		bb.Append(fmt.Sprint(v))
 		return
 	}
-	// Fallback estremo: se il tipo del valore non combacia con quanto
-	// atteso (driver "esotico" o combinazione non gestita), evitiamo un
-	// panic e appendiamo NULL. In produzione vale la pena loggare qui.
+
+	slog.Error("failed to map value to arrow type", slog.String("id", t.ID().String()))
 	b.AppendNull()
 }
 
