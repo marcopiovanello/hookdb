@@ -53,6 +53,7 @@ func main() {
 		logger.Error("scan iniziale del catalogo fallita", "err", err)
 		os.Exit(1)
 	}
+	defer cat.Close()
 
 	// parquet files discovery in data dir
 	go runTicker(mainCtx, cfg.ScanInterval, func() {
@@ -76,6 +77,8 @@ func main() {
 	flightSrv := flightsql.NewFlightServer(impl)
 
 	grpcServer := grpc.NewServer()
+	defer grpcServer.GracefulStop()
+
 	flight.RegisterFlightServiceServer(grpcServer, flightSrv)
 
 	wrappedGrpc := grpcweb.WrapServer(grpcServer,
@@ -98,6 +101,7 @@ func main() {
 		Addr:    cfg.ListenAddr,
 		Handler: handler,
 	}
+	defer httpServer.Close()
 
 	httpServer.Protocols = new(http.Protocols)
 	httpServer.Protocols.SetUnencryptedHTTP2(true) //TODO: enable public key authentication
@@ -114,12 +118,6 @@ func main() {
 	<-mainCtx.Done()
 
 	logger.Info("shutting down...")
-
-	grpcServer.GracefulStop()
-	logger.Info("stopped arrow flight sql grpc server")
-
-	db.Close()
-	logger.Info("closed duckdb database...")
 }
 
 func runTicker(ctx context.Context, interval time.Duration, fn func()) {

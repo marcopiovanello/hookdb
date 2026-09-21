@@ -81,6 +81,10 @@ func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Log
 	return cat
 }
 
+func (c *Catalog) Close() error {
+	return c.wal.Close()
+}
+
 func (c *Catalog) recoverPendingDeletions() error {
 	oldFilesSeq, err := c.wal.Recover()
 	if err != nil {

@@ -1,6 +1,7 @@
 package sqlutil
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -9,6 +10,14 @@ import (
 func ValidateIdentifier(s string) string {
 	s = strings.ReplaceAll(s, "\x00", "")
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+func QuoteLiteral(s string) (string, error) {
+	if strings.ContainsRune(s, 0) {
+		return "", fmt.Errorf("string contains null byte: %q", s)
+	}
+	escaped := strings.ReplaceAll(s, "'", "''")
+	return "'" + escaped + "'", nil
 }
 
 func QuoteStringSlice(s []string) string {

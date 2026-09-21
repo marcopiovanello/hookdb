@@ -66,10 +66,11 @@ func (c *Compactor) Run(ctx context.Context) {
 
 func (c *Compactor) runOnce() {
 	tables := c.cat.Tables()
+
 	for _, lvlCfg := range c.levels {
 		for _, table := range tables {
 			if err := c.compactLevel(table, lvlCfg); err != nil {
-				c.logger.Error("compaction fallita", "table", table, "level", lvlCfg.Level, "err", err)
+				c.logger.Error("compaction failed", "table", table, "level", lvlCfg.Level, "err", err)
 			}
 		}
 	}
@@ -103,10 +104,10 @@ func (c *Compactor) compactLevel(table string, cfg config.LevelConfig) error {
 	}
 
 	if err := c.cat.ReplaceFiles(table, candidates, finalOut, nextLevel); err != nil {
-		return fmt.Errorf("aggiornamento catalogo: %w", err)
+		return fmt.Errorf("failed updating catalog: %w", err)
 	}
 
-	c.logger.Info("compaction completata",
+	c.logger.Info("compaction completed",
 		"table", table,
 		"from_level", cfg.Level,
 		"to_level", nextLevel,
@@ -140,21 +141,29 @@ func (c *Compactor) filterStable(files []string, minAge time.Duration) []string 
 }
 
 func (c *Compactor) mergeFiles(files []string, outPath string) error {
+	quotedFiles := sqlutil.QuoteStringSlice(files)
+	quotedOut, err := sqlutil.QuoteLiteral(outPath)
+	if err != nil {
+		return err
+	}
+
 	orderedStmt := fmt.Sprintf(
-		"COPY (SELECT * FROM read_parquet([%s], union_by_name=true) ODERED BY %s) TO ? (FORMAT PARQUET, COMPRESSION ZSTD)",
-		sqlutil.QuoteStringSlice(files),
+		"COPY (SELECT * FROM read_parquet([%s], union_by_name=true) ORDER BY %s) TO %s (FORMAT PARQUET, COMPRESSION ZSTD)",
+		quotedFiles,
 		sqlutil.ValidateIdentifier(c.timeColumn),
+		quotedOut,
 	)
 
-	if _, err := c.db.Exec(orderedStmt, files, outPath); err == nil {
+	if _, err := c.db.Exec(orderedStmt); err == nil {
 		return nil
 	}
 
 	fallbackStmt := fmt.Sprintf(
-		"COPY (SELECT * FROM read_parquet([%s], union_by_name=true)) TO ? (FORMAT PARQUET, COMPRESSION ZSTD)",
-		sqlutil.QuoteStringSlice(files),
+		"COPY (SELECT * FROM read_parquet([%s], union_by_name=true)) TO %s (FORMAT PARQUET, COMPRESSION ZSTD)",
+		quotedFiles,
+		quotedOut,
 	)
 
-	_, err := c.db.Exec(fallbackStmt, files, outPath)
+	_, err = c.db.Exec(fallbackStmt)
 	return err
 }
