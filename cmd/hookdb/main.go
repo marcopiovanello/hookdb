@@ -40,11 +40,6 @@ func main() {
 	mainCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-	// 	logger.Error("cannot create data dir", "err", err)
-	// 	os.Exit(1)
-	// }
-
 	// in memory duckdb for query execution and container for the views (which are rebuilt on restart)
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -131,8 +126,10 @@ func runTicker(ctx context.Context, interval time.Duration, fn func()) {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
