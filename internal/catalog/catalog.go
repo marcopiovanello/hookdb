@@ -83,16 +83,12 @@ func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Log
 }
 
 func (c *Catalog) recoverPendingDeletions() error {
-	oldFiles, err := c.wal.Recover()
+	oldFilesSeq, err := c.wal.Recover()
 	if err != nil {
 		return err
 	}
 
-	if len(oldFiles) > 0 {
-		c.logger.Info("clearing pending files", "count", len(oldFiles))
-	}
-
-	for _, f := range oldFiles {
+	for f := range oldFilesSeq {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 			c.logger.Warn("cannot remove file", "file", f, "err", err)
 		}

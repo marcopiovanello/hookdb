@@ -3,12 +3,18 @@
 package wal
 
 import (
-	"encoding/json"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"hash/crc32"
+	"io"
+	"iter"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type State string
@@ -17,16 +23,6 @@ const (
 	StatePending   State = "PENDING"
 	StateCommitted State = "COMMITTED"
 )
-
-type Record struct {
-	ID        string    `json:"id"`
-	Table     string    `json:"table"`
-	OldFiles  []string  `json:"old_files"`
-	NewFile   string    `json:"new_file"`
-	NewLevel  int       `json:"new_level"`
-	State     State     `json:"state"`
-	Timestamp time.Time `json:"timestamp"`
-}
 
 type WAL struct {
 	mu   sync.Mutex
@@ -46,21 +42,21 @@ func Open(dataDir string) (*WAL, error) {
 	}, nil
 }
 
-func (w *WAL) LogPending(id, table string, oldFiles []string, newFile string, newLevel int) (*Record, error) {
+func (w *WAL) LogPending(id, table string, oldFiles []string, newFile string, newLevel int) (*LogRecord, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	rec := Record{
-		ID:        id,
-		Table:     table,
-		OldFiles:  oldFiles,
-		NewFile:   newFile,
-		NewLevel:  newLevel,
-		State:     StatePending,
-		Timestamp: time.Now(),
+	rec := LogRecord{
+		Id:            id,
+		Table:         table,
+		OldFiles:      oldFiles,
+		CompactedFile: newFile,
+		NewLevel:      uint32(newLevel),
+		State:         string(StatePending),
+		Timestamp:     time.Now().UnixNano(),
 	}
 
-	if err := w.appendRecord(rec); err != nil {
+	if err := w.appendRecord(&rec); err != nil {
 		return nil, err
 	}
 	return &rec, nil
@@ -70,79 +66,112 @@ func (w *WAL) LogCommitted(id string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	rec := Record{
-		ID:        id,
-		State:     StateCommitted,
-		Timestamp: time.Now(),
+	rec := &LogRecord{
+		Id:        id,
+		State:     string(StateCommitted),
+		Timestamp: time.Now().UnixNano(),
 	}
+
 	return w.appendRecord(rec)
 }
 
-func (w *WAL) appendRecord(rec Record) error {
-	data, err := json.Marshal(rec)
+func (w *WAL) appendRecord(rec *LogRecord) error {
+	data, err := proto.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
+
+	checksum := crc32.ChecksumIEEE(data)
+
+	var (
+		length = uint32(len(data))
+		header = make([]byte, 8)
+	)
+
+	binary.BigEndian.PutUint32(header[0:4], length)
+	binary.BigEndian.PutUint32(header[4:8], checksum)
+
+	if _, err := w.file.Write(header); err != nil {
+		return err
+	}
 	if _, err := w.file.Write(data); err != nil {
 		return err
 	}
+
 	return w.file.Sync()
 }
 
-func (w *WAL) Recover() ([]string, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	data, err := os.ReadFile(w.path)
-	if err != nil && !os.IsNotExist(err) {
+func ReadNext(r io.Reader) (*LogRecord, error) {
+	header := make([]byte, 8)
+	_, err := io.ReadFull(r, header)
+	if err != nil {
 		return nil, err
 	}
 
-	records := make(map[string]Record)
-	lines := splitLines(data)
+	length := binary.BigEndian.Uint32(header[0:4])
+	expectedChecksum := binary.BigEndian.Uint32(header[4:8])
 
-	for _, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		var rec Record
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return nil, fmt.Errorf("error while reading wal record: %w", err)
+	}
+
+	actualChecksum := crc32.ChecksumIEEE(payload)
+	if actualChecksum != expectedChecksum {
+		return nil, fmt.Errorf("found corrupted data! checksum does not match!")
+	}
+
+	record := &LogRecord{}
+	if err := proto.Unmarshal(payload, record); err != nil {
+		return nil, err
+	}
+
+	return record, nil
+}
+
+func (w *WAL) Recover() (iter.Seq[string], error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	uncommitted := make(map[string][]string)
+
+	for {
+		record, err := ReadNext(w.file)
+
+		if err == io.EOF {
+			// succesful recover
+			break
 		}
 
-		if rec.State == StateCommitted {
-			delete(records, rec.ID)
-		} else {
-			records[rec.ID] = rec
+		if err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				// found truncated last record. maybe due to a forced kill...
+				break
+			}
+
+			return nil, fmt.Errorf("stopped WAL recover. found corrupted data: %w", err)
+		}
+
+		if State(record.State) != StateCommitted {
+			uncommitted[record.Id] = record.OldFiles
 		}
 	}
 
-	var uncleanedFiles []string
-	for _, rec := range records {
-		uncleanedFiles = append(uncleanedFiles, rec.OldFiles...)
+	seq := func(yield func(string) bool) {
+		for _, files := range uncommitted {
+			for _, f := range files {
+				if !yield(f) {
+					return
+				}
+			}
+		}
 	}
 
-	return uncleanedFiles, nil
+	return seq, nil
 }
 
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.file.Close()
-}
-
-func splitLines(data []byte) [][]byte {
-	var lines [][]byte
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			lines = append(lines, data[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	return lines
 }

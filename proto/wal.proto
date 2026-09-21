@@ -1,0 +1,14 @@
+syntax = "proto3";
+package wal;
+
+option go_package = "github.com/marcopiovanello/hookdb/internal/wal";
+
+message LogRecord {
+  string id                 = 1;
+  string table              = 2;
+  repeated string old_files = 3;
+  string compacted_file     = 4;
+  uint32 new_level          = 5;
+  string state              = 6;
+  int64 timestamp           = 7;
+}
