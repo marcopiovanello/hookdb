@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb"
+	_ "github.com/duckdb/duckdb-go/v2"
 	"google.golang.org/grpc"
 
 	"github.com/apache/arrow-go/v18/arrow/flight"
