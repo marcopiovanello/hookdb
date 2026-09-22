@@ -53,7 +53,7 @@ type Catalog struct {
 	deleteGrace time.Duration
 	logger      *slog.Logger
 
-	wal *wal.WAL
+	wal wal.WAL
 }
 
 func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Logger) *Catalog {
@@ -209,19 +209,25 @@ func (c *Catalog) FilesAtLevel(table string, level int) []string {
 //
 // TLDR: ReplaceFiles is transacional
 func (c *Catalog) ReplaceFiles(table string, oldFiles []string, newFile string, newLevel int) error {
-	// Normalizza i path per evitare difformità nelle stringhe
+	// Normalized path
 	cleanOldFiles := make([]string, len(oldFiles))
 	for i, f := range oldFiles {
 		cleanOldFiles[i] = filepath.Clean(f)
 	}
+
 	cleanNewFile := filepath.Clean(newFile)
 
 	// WAL transaction ID
 	txID := uuid.NewV7().String()
 
 	// start a transaction
-	// write ahead phase - record the deletion request before thouching the storage and the db
-	_, err := c.wal.LogPending(txID, table, cleanOldFiles, cleanNewFile, newLevel)
+	// write ahead: record the deletion request before thouching the storage and the db
+	_, err := c.wal.LogPending(txID, &wal.CompactionLog{
+		Table:         table,
+		CompactedFile: cleanNewFile,
+		OldFiles:      cleanOldFiles,
+		NewLevel:      newLevel,
+	})
 	if err != nil {
 		return fmt.Errorf("wal log pending: %w", err)
 	}
