@@ -45,13 +45,13 @@ type Table struct {
 }
 
 type Catalog struct {
-	mu      sync.RWMutex
-	db      *sql.DB
-	dataDir string
-	tables  map[string]*Table
-
-	deleteGrace time.Duration
 	logger      *slog.Logger
+	db          *sql.DB
+	dataDir     string
+	deleteGrace time.Duration
+
+	mu     sync.RWMutex
+	tables map[string]*Table
 
 	wal wal.WAL
 }

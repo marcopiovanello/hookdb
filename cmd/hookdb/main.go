@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/duckdb/duckdb-go/v2"
 	_ "github.com/duckdb/duckdb-go/v2"
 	"google.golang.org/grpc"
 
@@ -41,9 +43,16 @@ func main() {
 	defer stop()
 
 	// in memory duckdb for query execution and container for the views (which are rebuilt on restart)
-	db, err := sql.Open("duckdb", "")
+	connector, err := duckdb.NewConnector(":memory:", func(execer driver.ExecerContext) error { return nil })
 	if err != nil {
-		logger.Error("apertura duckdb fallita", "err", err)
+		logger.Error("failed creating duckdb connector", "err", err)
+		os.Exit(1)
+	}
+	defer connector.Close()
+
+	db := sql.OpenDB(connector)
+	if err != nil {
+		logger.Error("failed opening duckdb database", "err", err)
 		os.Exit(1)
 	}
 	defer db.Close()
@@ -72,8 +81,14 @@ func main() {
 	})
 	go compactor.Run(mainCtx)
 
+	adbc, err := connector.Connect(mainCtx)
+	if err != nil {
+		logger.Error("failed creating Arrow Database Connectivity conn", "err", err)
+		os.Exit(1)
+	}
+
 	// arrow flight SQL server used as efficient columnar data transfer protocol
-	impl := server.New(db, cat)
+	impl := server.New(adbc.(*duckdb.Conn), cat)
 	flightSrv := flightsql.NewFlightServer(impl)
 
 	grpcServer := grpc.NewServer()

@@ -9,30 +9,26 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/apache/arrow-go/v18/arrow"
-	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/flight"
 	"github.com/apache/arrow-go/v18/arrow/flight/flightsql"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/duckdb/duckdb-go/v2"
 
 	"github.com/marcopiovanello/hookdb/internal/catalog"
-	"github.com/marcopiovanello/hookdb/internal/sqlarrow"
 )
-
-const batchSize = 8192
 
 type Server struct {
 	flightsql.BaseServer
 
-	db  *sql.DB
+	db  *duckdb.Conn
 	cat *catalog.Catalog
 	mem memory.Allocator
 }
 
-func New(db *sql.DB, cat *catalog.Catalog) *Server {
+func New(db *duckdb.Conn, cat *catalog.Catalog) *Server {
 	return &Server{
 		db:  db,
 		cat: cat,
@@ -82,28 +78,26 @@ func (s *Server) DoGetStatement(
 ) {
 	query := string(ticket.GetStatementHandle())
 
-	rows, err := s.db.QueryContext(ctx, query)
+	ar, err := duckdb.NewArrowFromConn(s.db)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed while executing query: %w", err)
-	}
-
-	schema, err := sqlarrow.BuildSchema(rows)
-	if err != nil {
-		rows.Close()
 		return nil, nil, err
 	}
 
+	reader, err := ar.QueryContext(ctx, query)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer reader.Release()
+
+	schema := reader.Schema()
 	ch := make(chan flight.StreamChunk)
 
 	go func() {
-		defer rows.Close()
-		defer close(ch)
-
-		err := sqlarrow.RowsToRecords(s.mem, schema, rows, batchSize, func(rec arrow.Record) error {
-			ch <- flight.StreamChunk{Data: rec}
-			return nil
-		})
-		if err != nil {
+		for reader.Next() {
+			record := reader.RecordBatch()
+			ch <- flight.StreamChunk{Data: record}
+		}
+		if reader.Err() != nil {
 			ch <- flight.StreamChunk{Err: err}
 		}
 	}()
@@ -114,53 +108,43 @@ func (s *Server) DoGetStatement(
 func (s *Server) schemaForQuery(ctx context.Context, query string) (*arrow.Schema, error) {
 	probe := fmt.Sprintf("SELECT * FROM (%s) AS _tf_probe LIMIT 0", query)
 
-	rows, err := s.db.QueryContext(ctx, probe)
+	ar, err := duckdb.NewArrowFromConn(s.db)
 	if err != nil {
-		rows, err = s.db.QueryContext(ctx, query)
+		return nil, err
+	}
+
+	reader, err := ar.QueryContext(ctx, probe)
+	if err != nil {
+		reader, err = ar.QueryContext(ctx, query)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	defer rows.Close()
-	return sqlarrow.BuildSchema(rows)
+	defer reader.Release()
+	return reader.Schema(), reader.Err()
 }
 
 func (s *Server) DoGetCatalogs(ctx context.Context) (*arrow.Schema, <-chan flight.StreamChunk, error) {
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "catalog_name", Type: arrow.BinaryTypes.String},
-	}, nil)
-
-	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT catalog_name FROM information_schema.schemata")
+	ar, err := duckdb.NewArrowFromConn(s.db)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
 
-	b := array.NewRecordBuilder(s.mem, schema)
-	defer b.Release()
-
-	strBuilder := b.Field(0).(*array.StringBuilder)
-
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, nil, err
-		}
-		strBuilder.Append(name)
-	}
-
-	if err := rows.Err(); err != nil {
+	reader, err := ar.QueryContext(ctx, "SELECT DISTINCT catalog_name FROM information_schema.schemata")
+	if err != nil {
 		return nil, nil, err
 	}
+	defer reader.Release()
 
-	rec := b.NewRecordBatch()
+	schema := reader.Schema()
+	record := reader.RecordBatch()
 
 	ch := make(chan flight.StreamChunk, 1)
-	ch <- flight.StreamChunk{Data: rec}
+	ch <- flight.StreamChunk{Data: record}
 	close(ch)
 
-	return schema, ch, nil
+	return schema, ch, reader.Err()
 }
 
 // TODO: DoGetDBSchemas / GetFlightInfoSchemas
