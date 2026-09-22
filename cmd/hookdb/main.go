@@ -51,15 +51,11 @@ func main() {
 	defer connector.Close()
 
 	db := sql.OpenDB(connector)
-	if err != nil {
-		logger.Error("failed opening duckdb database", "err", err)
-		os.Exit(1)
-	}
 	defer db.Close()
 
 	cat := catalog.New(db, cfg.DataDir, cfg.DeleteGracePeriod, logger)
 	if err := cat.Scan(); err != nil {
-		logger.Error("scan iniziale del catalogo fallita", "err", err)
+		logger.Error("failed initial catalog scan", "err", err)
 		os.Exit(1)
 	}
 	defer cat.Close()
@@ -67,7 +63,7 @@ func main() {
 	// parquet files discovery in data dir
 	go runTicker(mainCtx, cfg.ScanInterval, func() {
 		if err := cat.Scan(); err != nil {
-			logger.Error("scan periodica fallita", "err", err)
+			logger.Error("failed catalog scan", "err", err)
 		}
 	})
 
