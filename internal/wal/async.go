@@ -13,7 +13,7 @@
 package wal
 
 import (
-	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -25,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -38,13 +37,22 @@ const (
 	HeaderLen int = 8
 )
 
-type WALImpl struct {
+var bufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 1024)
+		return &b
+	},
+}
+
+type AsyncWAL struct {
 	mu   sync.Mutex
 	path string
 	file *os.File
+
+	headerBuf [HeaderLen]byte
 }
 
-func Open(dataDir string) (WAL, error) {
+func Open(ctx context.Context, dataDir string) (WAL, error) {
 	walPath := filepath.Join(dataDir, "db.wal")
 
 	f, err := os.OpenFile(walPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
@@ -52,13 +60,36 @@ func Open(dataDir string) (WAL, error) {
 		return nil, fmt.Errorf("open wal: %w", err)
 	}
 
-	return &WALImpl{
+	w := &AsyncWAL{
 		path: walPath,
 		file: f,
-	}, nil
+	}
+
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				w.mu.Lock()
+				w.Sync()
+				w.mu.Unlock()
+			case <-ctx.Done():
+				w.Close()
+				return
+			}
+		}
+	}()
+
+	return w, nil
 }
 
-func (w *WALImpl) LogPending(id string, log *CompactionLog) (*LogRecord, error) {
+func (w *AsyncWAL) Sync() error {
+	return w.file.Sync()
+}
+
+func (w *AsyncWAL) LogPending(id string, log *CompactionLog) (*LogRecord, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -79,7 +110,7 @@ func (w *WALImpl) LogPending(id string, log *CompactionLog) (*LogRecord, error) 
 	return &rec, nil
 }
 
-func (w *WALImpl) LogCommitted(id string) error {
+func (w *AsyncWAL) LogCommitted(id string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -93,9 +124,14 @@ func (w *WALImpl) LogCommitted(id string) error {
 }
 
 // Add a log to the WAL.
-func (w *WALImpl) appendRecord(rec *LogRecord) error {
-	data, err := proto.Marshal(rec)
+func (w *AsyncWAL) appendRecord(rec *LogRecord) error {
+	pBuf := bufferPool.Get().(*[]byte)
+	buf := (*pBuf)[:0]
+
+	options := proto.MarshalOptions{}
+	data, err := options.MarshalAppend(buf, rec)
 	if err != nil {
+		bufferPool.Put(pBuf)
 		return err
 	}
 
@@ -110,25 +146,19 @@ func (w *WALImpl) appendRecord(rec *LogRecord) error {
 	binary.BigEndian.PutUint32(header[4:8], checksum)
 
 	if _, err := w.file.Write(header); err != nil {
+		bufferPool.Put(pBuf)
 		return err
 	}
 
-	walBuf := &bytes.Buffer{}
-
-	if _, err := walBuf.Write(data); err != nil {
+	if _, err := w.file.Write(data); err != nil {
+		bufferPool.Put(pBuf)
 		return err
 	}
 
-	enc, err := zstd.NewWriter(w.file)
-	if err != nil {
-		return err
-	}
+	*pBuf = data
+	bufferPool.Put(pBuf)
 
-	if _, err := io.Copy(enc, walBuf); err != nil {
-		return err
-	}
-
-	return w.file.Sync()
+	return nil
 }
 
 func readNext(r io.Reader) (*LogRecord, error) {
@@ -147,29 +177,22 @@ func readNext(r io.Reader) (*LogRecord, error) {
 		return nil, fmt.Errorf("error while reading wal record: %w", err)
 	}
 
-	dec, err := zstd.NewReader(bytes.NewReader(compressedPayload))
-	if err != nil {
-		return nil, err
-	}
+	payload := make([]byte, 0)
 
-	payload := &bytes.Buffer{}
-
-	dec.WriteTo(payload)
-
-	actualChecksum := crc32.ChecksumIEEE(payload.Bytes())
+	actualChecksum := crc32.ChecksumIEEE(payload)
 	if actualChecksum != expectedChecksum {
 		return nil, fmt.Errorf("found corrupted data! checksum does not match!")
 	}
 
 	record := &LogRecord{}
-	if err := proto.Unmarshal(payload.Bytes(), record); err != nil {
+	if err := proto.Unmarshal(payload, record); err != nil {
 		return nil, err
 	}
 
 	return record, nil
 }
 
-func (w *WALImpl) Recover() (iter.Seq[string], error) {
+func (w *AsyncWAL) Recover() (iter.Seq[string], error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -210,7 +233,7 @@ func (w *WALImpl) Recover() (iter.Seq[string], error) {
 	return seq, nil
 }
 
-func (w *WALImpl) Close() error {
+func (w *AsyncWAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.file.Close()

@@ -13,6 +13,7 @@
 package catalog
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -61,7 +62,7 @@ func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Log
 		logger = slog.Default()
 	}
 
-	walLog, err := wal.Open(dataDir)
+	wal, err := wal.Open(context.Background(), dataDir)
 	if err != nil {
 		panic(fmt.Sprintf("cannot initialize wal: %s", err.Error()))
 	}
@@ -72,7 +73,7 @@ func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Log
 		tables:      make(map[string]*Table),
 		deleteGrace: deleteGrace,
 		logger:      logger,
-		wal:         walLog,
+		wal:         wal,
 	}
 
 	if err := cat.recoverPendingDeletions(); err != nil {

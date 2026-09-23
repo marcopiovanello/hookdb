@@ -25,4 +25,7 @@ type WAL interface {
 
 	// Safely closes the WAL
 	Close() error
+
+	// Forces the kernel to flush the data from the page cache to the WAL file
+	Sync() error
 }
