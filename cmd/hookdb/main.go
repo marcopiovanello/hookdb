@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/duckdb/duckdb-go/v2"
 	_ "github.com/duckdb/duckdb-go/v2"
 	"google.golang.org/grpc"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/marcopiovanello/hookdb/internal/catalog"
 	"github.com/marcopiovanello/hookdb/internal/compaction"
 	"github.com/marcopiovanello/hookdb/internal/config"
+	"github.com/marcopiovanello/hookdb/internal/pool"
 	"github.com/marcopiovanello/hookdb/internal/server"
 
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
@@ -41,16 +44,18 @@ func main() {
 	defer stop()
 
 	// in memory duckdb for query execution and container for the views (which are rebuilt on restart)
-	db, err := sql.Open("duckdb", "")
+	connector, err := duckdb.NewConnector(":memory:", func(execer driver.ExecerContext) error { return nil })
 	if err != nil {
-		logger.Error("apertura duckdb fallita", "err", err)
+		logger.Error("failed creating duckdb connector", "err", err)
 		os.Exit(1)
 	}
+
+	db := sql.OpenDB(connector)
 	defer db.Close()
 
 	cat := catalog.New(db, cfg.DataDir, cfg.DeleteGracePeriod, logger)
 	if err := cat.Scan(); err != nil {
-		logger.Error("scan iniziale del catalogo fallita", "err", err)
+		logger.Error("failed initial catalog scan", "err", err)
 		os.Exit(1)
 	}
 	defer cat.Close()
@@ -58,7 +63,7 @@ func main() {
 	// parquet files discovery in data dir
 	go runTicker(mainCtx, cfg.ScanInterval, func() {
 		if err := cat.Scan(); err != nil {
-			logger.Error("scan periodica fallita", "err", err)
+			logger.Error("failed catalog scan", "err", err)
 		}
 	})
 
@@ -73,7 +78,13 @@ func main() {
 	go compactor.Run(mainCtx)
 
 	// arrow flight SQL server used as efficient columnar data transfer protocol
-	impl := server.New(db, cat)
+	duckdbPool, err := pool.NewDuckDBConnectorPool(connector, 8)
+	if err != nil {
+		logger.Error("failed creating duckdb connector pool", "err", err)
+		os.Exit(1)
+	}
+
+	impl := server.New(duckdbPool, cat, logger)
 	flightSrv := flightsql.NewFlightServer(impl)
 
 	grpcServer := grpc.NewServer()
