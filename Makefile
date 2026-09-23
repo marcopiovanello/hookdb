@@ -1,4 +1,7 @@
 default:
+	GOAMD64=v3 CGO_ENABLED=1 go run -tags=duckdb_arrow ./cmd/hookdb/main.go
+
+build:
 	GOAMD64=v3 CGO_ENABLED=1 go build -tags=duckdb_arrow -o hookdb ./cmd/hookdb/main.go
 
 protobuf:

@@ -245,7 +245,7 @@ func (c *Catalog) ReplaceFiles(table string, oldFiles []string, newFile string, 
 	newSet := append(remaining, FileMeta{Path: cleanNewFile, Level: newLevel})
 
 	// atomic update of duckdb
-	if err := c.refreshViewLocked(table, newSet); err != nil {
+	if err := c.refreshView(table, newSet); err != nil {
 		return fmt.Errorf("refresh view during compaction: %w", err)
 	}
 
@@ -275,24 +275,6 @@ func (c *Catalog) deleteAfterGrace(txID string, files []string) {
 }
 
 // excecutes the swap of ReplaceFiles. it must be wrapped by a mutex lock
-func (c *Catalog) refreshViewLocked(table string, files []FileMeta) error {
-	if len(files) == 0 {
-		return nil
-	}
-	quoted := make([]string, len(files))
-	for i, f := range files {
-		quoted[i] = "'" + strings.ReplaceAll(f.Path, "'", "''") + "'"
-	}
-
-	stmt := fmt.Sprintf(
-		"CREATE OR REPLACE VIEW %s AS SELECT * FROM read_parquet([%s], union_by_name=true)",
-		table,
-		strings.Join(quoted, ", "),
-	)
-	_, err := c.db.Exec(stmt)
-	return err
-}
-
 func (c *Catalog) refreshView(table string, files []FileMeta) error {
 	if len(files) == 0 {
 		return nil
@@ -304,7 +286,7 @@ func (c *Catalog) refreshView(table string, files []FileMeta) error {
 	}
 
 	stmt := fmt.Sprintf(
-		"CREATE OR REPLACE VIEW %s AS SELECT * FROM read_parquet([%s], union_by_name=true)",
+		"CREATE OR REPLACE VIEW %s AS SELECT * REPLACE ((time AT TIME ZONE 'UTC')::TIMESTAMP_NS AS time) FROM read_parquet([%s], union_by_name=true)",
 		sqlutil.ValidateIdentifier(table),
 		strings.Join(quoted, ", "),
 	)

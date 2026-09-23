@@ -22,6 +22,7 @@ import (
 	"github.com/marcopiovanello/hookdb/internal/catalog"
 	"github.com/marcopiovanello/hookdb/internal/compaction"
 	"github.com/marcopiovanello/hookdb/internal/config"
+	"github.com/marcopiovanello/hookdb/internal/pool"
 	"github.com/marcopiovanello/hookdb/internal/server"
 
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
@@ -48,7 +49,6 @@ func main() {
 		logger.Error("failed creating duckdb connector", "err", err)
 		os.Exit(1)
 	}
-	defer connector.Close()
 
 	db := sql.OpenDB(connector)
 	defer db.Close()
@@ -77,14 +77,14 @@ func main() {
 	})
 	go compactor.Run(mainCtx)
 
-	adbc, err := connector.Connect(mainCtx)
+	// arrow flight SQL server used as efficient columnar data transfer protocol
+	duckdbPool, err := pool.NewDuckDBConnectorPool(connector, 8)
 	if err != nil {
-		logger.Error("failed creating Arrow Database Connectivity conn", "err", err)
+		logger.Error("failed creating duckdb connector pool", "err", err)
 		os.Exit(1)
 	}
 
-	// arrow flight SQL server used as efficient columnar data transfer protocol
-	impl := server.New(adbc.(*duckdb.Conn), cat)
+	impl := server.New(duckdbPool, cat, logger)
 	flightSrv := flightsql.NewFlightServer(impl)
 
 	grpcServer := grpc.NewServer()

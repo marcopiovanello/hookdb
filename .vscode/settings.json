@@ -2,6 +2,7 @@
   "gopls": {
     "build.buildFlags": [
       "-tags=duckdb_arrow"
-    ]
+    ],
+    "ui.semanticTokens": true
   }
 }

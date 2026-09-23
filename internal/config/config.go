@@ -17,7 +17,7 @@ type Config struct {
 
 	// TimeColumn is the column that is used by the ORDER BY of the time-series values
 	// Not setting a timecolumn drastically lower the performance of the column store.
-	TimeColumn string `yaml:"time_column"`
+	TimeColumn string //XXX: deprecated time column should be always time
 
 	// How often the parquet files are read for changes
 	ScanInterval time.Duration `yaml:"scan_interval"`
@@ -41,7 +41,7 @@ type LevelConfig struct {
 
 func Default() Config {
 	return Config{
-		DataDir:            "/tmp/datadir",
+		DataDir:            "/home/marco/Devel/agent/parquet_metrics",
 		ListenAddr:         "0.0.0.0:32010",
 		TimeColumn:         "time",
 		ScanInterval:       5 * time.Second,
