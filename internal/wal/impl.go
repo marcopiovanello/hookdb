@@ -13,6 +13,7 @@
 package wal
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -32,6 +34,8 @@ type State string
 const (
 	StatePending   State = "PENDING"
 	StateCommitted State = "COMMITTED"
+
+	HeaderLen int = 8
 )
 
 type WALImpl struct {
@@ -99,7 +103,7 @@ func (w *WALImpl) appendRecord(rec *LogRecord) error {
 
 	var (
 		length = uint32(len(data))
-		header = make([]byte, 8)
+		header = make([]byte, HeaderLen)
 	)
 
 	binary.BigEndian.PutUint32(header[0:4], length)
@@ -108,7 +112,19 @@ func (w *WALImpl) appendRecord(rec *LogRecord) error {
 	if _, err := w.file.Write(header); err != nil {
 		return err
 	}
-	if _, err := w.file.Write(data); err != nil {
+
+	walBuf := &bytes.Buffer{}
+
+	if _, err := walBuf.Write(data); err != nil {
+		return err
+	}
+
+	enc, err := zstd.NewWriter(w.file)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(enc, walBuf); err != nil {
 		return err
 	}
 
@@ -116,7 +132,7 @@ func (w *WALImpl) appendRecord(rec *LogRecord) error {
 }
 
 func readNext(r io.Reader) (*LogRecord, error) {
-	header := make([]byte, 8)
+	header := make([]byte, HeaderLen)
 
 	_, err := io.ReadFull(r, header)
 	if err != nil {
@@ -124,20 +140,29 @@ func readNext(r io.Reader) (*LogRecord, error) {
 	}
 
 	length := binary.BigEndian.Uint32(header[0:4])
-	expectedChecksum := binary.BigEndian.Uint32(header[4:8])
+	expectedChecksum := binary.BigEndian.Uint32(header[4:HeaderLen])
 
-	payload := make([]byte, length)
-	if _, err := io.ReadFull(r, payload); err != nil {
+	compressedPayload := make([]byte, length)
+	if _, err := io.ReadFull(r, compressedPayload); err != nil {
 		return nil, fmt.Errorf("error while reading wal record: %w", err)
 	}
 
-	actualChecksum := crc32.ChecksumIEEE(payload)
+	dec, err := zstd.NewReader(bytes.NewReader(compressedPayload))
+	if err != nil {
+		return nil, err
+	}
+
+	payload := &bytes.Buffer{}
+
+	dec.WriteTo(payload)
+
+	actualChecksum := crc32.ChecksumIEEE(payload.Bytes())
 	if actualChecksum != expectedChecksum {
 		return nil, fmt.Errorf("found corrupted data! checksum does not match!")
 	}
 
 	record := &LogRecord{}
-	if err := proto.Unmarshal(payload, record); err != nil {
+	if err := proto.Unmarshal(payload.Bytes(), record); err != nil {
 		return nil, err
 	}
 

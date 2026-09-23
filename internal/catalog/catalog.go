@@ -87,6 +87,8 @@ func (c *Catalog) Close() error {
 }
 
 func (c *Catalog) recoverPendingDeletions() error {
+	c.logger.Info("rebuilding catalog from WAL")
+
 	oldFilesSeq, err := c.wal.Recover()
 	if err != nil {
 		return err
@@ -163,7 +165,7 @@ func (c *Catalog) Scan() error {
 			if err := c.refreshView(tableName, files); err != nil {
 				return fmt.Errorf("refresh view %s: %w", tableName, err)
 			}
-			c.logger.Info("table updated", "table", tableName, "n_file", len(files))
+			c.logger.Debug("table updated", "table", tableName, "n_file", len(files))
 		}
 	}
 	return nil

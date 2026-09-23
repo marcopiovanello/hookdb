@@ -7,6 +7,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/improbable-eng/grpc-web v0.15.0
+	github.com/klauspost/compress v1.20.0
 	google.golang.org/grpc v1.85.0-dev.0.20260825072537-93e31b48545e
 	google.golang.org/protobuf v1.36.12
 )
@@ -24,7 +25,6 @@ require (
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.30 // indirect
 	github.com/rs/cors v1.11.1 // indirect

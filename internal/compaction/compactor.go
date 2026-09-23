@@ -107,7 +107,7 @@ func (c *Compactor) compactLevel(table string, cfg config.LevelConfig) error {
 		return fmt.Errorf("failed updating catalog: %w", err)
 	}
 
-	c.logger.Info("compaction completed",
+	c.logger.Debug("compaction completed",
 		"table", table,
 		"from_level", cfg.Level,
 		"to_level", nextLevel,

@@ -41,7 +41,7 @@ type LevelConfig struct {
 
 func Default() Config {
 	return Config{
-		DataDir:            "/home/marco/Devel/agent/parquet_metrics",
+		DataDir:            "./data",
 		ListenAddr:         "0.0.0.0:32010",
 		TimeColumn:         "time",
 		ScanInterval:       5 * time.Second,
