@@ -177,12 +177,10 @@ func readNext(r io.Reader) (*LogRecord, error) {
 	length := binary.BigEndian.Uint32(header[0:4])
 	expectedChecksum := binary.BigEndian.Uint32(header[4:HeaderLen])
 
-	compressedPayload := make([]byte, length)
-	if _, err := io.ReadFull(r, compressedPayload); err != nil {
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
 		return nil, fmt.Errorf("error while reading wal record: %w", err)
 	}
-
-	payload := make([]byte, 0)
 
 	actualChecksum := crc32.ChecksumIEEE(payload)
 	if actualChecksum != expectedChecksum {
