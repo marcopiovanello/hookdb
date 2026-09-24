@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -37,25 +38,24 @@ const (
 	HeaderLen int = 8
 )
 
-var bufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 0, 1024)
-		return &b
-	},
-}
-
 type AsyncWAL struct {
-	mu   sync.Mutex
+	mu sync.Mutex
+
 	path string
 	file *os.File
 
+	// Notify dirty pages or records to be synced
+	dirty atomic.Uint32
+
+	// Reusable buffer for records header.
+	// Since the write is protected by a mutex it's safe for shared use.
 	headerBuf [HeaderLen]byte
 }
 
-func Open(ctx context.Context, dataDir string) (WAL, error) {
+func Open(ctx context.Context, dataDir string, syncPeriod time.Duration) (WAL, error) {
 	walPath := filepath.Join(dataDir, "db.wal")
 
-	f, err := os.OpenFile(walPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	f, err := os.OpenFile(walPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open wal: %w", err)
 	}
@@ -65,28 +65,31 @@ func Open(ctx context.Context, dataDir string) (WAL, error) {
 		file: f,
 	}
 
-	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				w.mu.Lock()
-				w.Sync()
-				w.mu.Unlock()
-			case <-ctx.Done():
-				w.Close()
-				return
-			}
-		}
-	}()
+	go w.periodicSync(ctx, syncPeriod)
 
 	return w, nil
 }
 
 func (w *AsyncWAL) Sync() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.file.Sync()
+}
+
+func (w *AsyncWAL) periodicSync(ctx context.Context, syncPeriod time.Duration) error {
+	ticker := time.NewTicker(syncPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if w.dirty.CompareAndSwap(1, 0) {
+				return w.file.Sync()
+			}
+		case <-ctx.Done():
+			return w.Close()
+		}
+	}
 }
 
 func (w *AsyncWAL) LogPending(id string, log *CompactionLog) (*LogRecord, error) {
@@ -157,6 +160,8 @@ func (w *AsyncWAL) appendRecord(rec *LogRecord) error {
 
 	*pBuf = data
 	bufferPool.Put(pBuf)
+
+	w.dirty.Store(1)
 
 	return nil
 }

@@ -62,7 +62,7 @@ func New(db *sql.DB, dataDir string, deleteGrace time.Duration, logger *slog.Log
 		logger = slog.Default()
 	}
 
-	wal, err := wal.Open(context.Background(), dataDir)
+	wal, err := wal.Open(context.Background(), dataDir, 50*time.Millisecond)
 	if err != nil {
 		panic(fmt.Sprintf("cannot initialize wal: %s", err.Error()))
 	}
